@@ -1,0 +1,54 @@
+name: Refresh climate data
+
+on:
+  schedule:
+    # GitHub cron UTC mein chalta hai. IST = UTC + 5:30
+    - cron: "30 0 * * *" # 06:00 IST
+    - cron: "30 6 * * *" # 12:00 IST
+    - cron: "30 12 * * *" # 18:00 IST
+  workflow_dispatch: # Actions tab se "Run workflow" dabakar haath se bhi chala sakte ho
+
+permissions:
+  contents: write # naya database commit karne ke liye
+
+concurrency:
+  group: climate-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Code download
+        uses: actions/checkout@v4
+
+      - name: Python setup
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-pipeline.txt
+
+      - name: Packages install
+        run: python -m pip install -r requirements-pipeline.txt
+
+      - name: Pipeline chalao (live data, history, emissions, forecast, check)
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          MAKE_REPORTS: "0" # Excel/PDF dashboard khud banata hai
+          MSSQL_ENABLED: "0" # SQL Server aapke laptop par hai, GitHub use nahi dekh sakta
+        run: python src/run_daily.py
+
+      - name: Naya database save karo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/climate.db
+          if git diff --cached --quiet; then
+            echo "Database mein koi badlav nahi, commit skip"
+          else
+            git commit -m "Data refresh $(date -u +'%Y-%m-%d %H:%M') UTC"
+            git pull --rebase origin "$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
